@@ -38,19 +38,6 @@ OUTPUT_FILE = os.path.join(OUTPUT_DIR, "pipeline_output.wav")
 VOICE_MODEL = "aura-asteria-en"
 
 
-def play_audio(filepath: str):
-    if sys.platform == "win32":
-        import winsound
-        winsound.PlaySound(filepath, winsound.SND_FILENAME)
-    else:
-        try:
-            from playsound import playsound
-            playsound(filepath)
-        except ImportError:
-            print(f"ℹ️  Audio saved to {filepath}")
-            print("   Install 'playsound' to auto-play: pip install playsound")
-
-
 def capture_speech() -> str:
     # Collect all final transcript segments
     transcript_parts: list[str] = []
@@ -129,27 +116,6 @@ def capture_speech() -> str:
     return full_text
 
 
-def synthesize_speech(text: str) -> str:
-    print(f"\n🔊 Converting to speech: \"{text[:80]}{'...' if len(text) > 80 else ''}\"")
-
-    client = DeepgramClient(api_key=API_KEY)
-
-    response = client.speak.v1.audio.generate(
-        text=text,
-        model=VOICE_MODEL,
-        encoding="linear16",
-        container="wav",
-    )
-
-    with open(OUTPUT_FILE, "wb") as audio_file:
-        for chunk in response:
-            if chunk:
-                audio_file.write(chunk)
-
-    print(f"✅ Audio saved to: {OUTPUT_FILE}")
-    return OUTPUT_FILE
-
-
 def main():
     if sys.platform == "win32":
         signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -166,14 +132,6 @@ def main():
         print("\n⚠️  No speech was detected. Exiting.")
         return
     print(f"\n📄 Full transcription:\n   \"{transcribed_text}\"\n")
-
-
-    print("📌 STEP 2: Text-to-Speech")
-    filepath = synthesize_speech(transcribed_text)
-
-    print("\n▶️  Playing generated audio...")
-    play_audio(filepath)
-    print("\n✨ Pipeline complete!")
 
 
 if __name__ == "__main__":
