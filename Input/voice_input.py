@@ -2,12 +2,10 @@
 Combined Voice Pipeline: Speech-to-Text → Text-to-Speech
 
 Usage:
-    python input.py
-
-1. Listens to your microphone and transcribes speech in real-time.
-2. When you press Ctrl+C, takes the full transcription and converts it
-   back to speech using Deepgram TTS.
-3. Plays the generated audio.
+    python voice_input.py [language_code]
+    Example: python voice_input.py hi   (for Hindi)
+    Example: python voice_input.py mr   (for Marathi)
+    Example: python voice_input.py en   (for English, default)
 """
 
 import os
@@ -37,16 +35,48 @@ OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "pipeline_output.wav")
 VOICE_MODEL = "aura-asteria-en"
 
+# Nova-2 Supported Languages
+SUPPORTED_LANGUAGES = {
+    "en": "English",
+    "hi": "Hindi",
+    "mr": "Marathi",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "bn": "Bengali",
+    "gu": "Gujarati",
+    "kn": "Kannada",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "ja": "Japanese",
+}
 
-def capture_speech() -> str:
-    # Collect all final transcript segments
+# Ensure Windows terminal supports UTF-8, emojis, and Indic scripts
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+# Determine language from command line argument (default: "en")
+def _resolve_default_language() -> str:
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].lower().strip()
+        if not arg.startswith("-") and arg not in ("text", "interactive"):
+            return arg
+    return "en"
+
+SELECTED_LANGUAGE = _resolve_default_language()
+if __name__ == "__main__" and SELECTED_LANGUAGE not in SUPPORTED_LANGUAGES:
+    print(f"⚠️  Warning: '{SELECTED_LANGUAGE}' not in known list. Passing directly to Deepgram.")
+
+
+def capture_speech(language: str = None) -> str:
     transcript_parts: list[str] = []
+    lang = language or SELECTED_LANGUAGE
 
     client = DeepgramClient(api_key=API_KEY)
 
     with client.listen.v1.connect(
         model="nova-2",
-        language="en",
+        language=lang,
         smart_format=True,
         interim_results=True,
         encoding="linear16",
@@ -54,11 +84,12 @@ def capture_speech() -> str:
         sample_rate=RATE,
     ) as ws:
 
-        # ── Event handlers ──
+        stop_event = threading.Event()
+        silence_timer = None
 
         def on_open(_data):
-            print("\n🎙️  Connection opened — start speaking!")
-            print("   Press Ctrl+C when you're done.\n")
+            print("\n🎙️  Listening — speak your command!")
+            print("   (Recording auto-completes after speaking, or press Ctrl+C)\n")
 
         def on_close(_data):
             print("\n🔌 Connection closed.")
@@ -67,29 +98,37 @@ def capture_speech() -> str:
             print(f"\n❌ Error: {error}")
 
         def on_message(message):
+            nonlocal silence_timer
             if not isinstance(message, ListenV1Results):
                 return
 
-            sentence = message.channel.alternatives[0].transcript
+            alternative = message.channel.alternatives[0]
+            sentence = alternative.transcript
             if not sentence:
                 return
 
             if message.is_final:
                 transcript_parts.append(sentence)
-                print(f"  ✅ {sentence}")
+                print(f"  ✅ [{lang.upper()}] {sentence}")
+
+                # Automatically complete 1.5 seconds after a finalized sentence
+                if silence_timer:
+                    silence_timer.cancel()
+                silence_timer = threading.Timer(1.5, stop_event.set)
+                silence_timer.start()
             else:
                 print(f"  ⏳ {sentence}", end="\r")
+                if silence_timer:
+                    silence_timer.cancel()
 
         ws.on(EventType.OPEN, on_open)
         ws.on(EventType.CLOSE, on_close)
         ws.on(EventType.ERROR, on_error)
         ws.on(EventType.MESSAGE, on_message)
 
-        # ── Listen in background thread ──
         listener_thread = threading.Thread(target=ws.start_listening, daemon=True)
         listener_thread.start()
 
-        # ── Stream mic audio ──
         audio = pyaudio.PyAudio()
         stream = audio.open(
             format=FORMAT,
@@ -100,12 +139,14 @@ def capture_speech() -> str:
         )
 
         try:
-            while True:
+            while not stop_event.is_set():
                 data = stream.read(CHUNK, exception_on_overflow=False)
                 ws.send_media(data)
         except KeyboardInterrupt:
-            print("\n\n⏹️  Recording stopped.")
+            print("\n⏹️  Recording stopped.")
         finally:
+            if silence_timer:
+                silence_timer.cancel()
             stream.stop_stream()
             stream.close()
             audio.terminate()
@@ -117,11 +158,9 @@ def capture_speech() -> str:
 
 
 def main():
-    if sys.platform == "win32":
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
-
+    lang_name = SUPPORTED_LANGUAGES.get(SELECTED_LANGUAGE, SELECTED_LANGUAGE)
     print("=" * 55)
-    print("  🎤 Deepgram Voice Pipeline: STT → TTS")
+    print(f"  🎤 Deepgram Voice Pipeline ({lang_name} - '{SELECTED_LANGUAGE}')")
     print("=" * 55)
     
     print("\n📌 STEP 1: Speech-to-Text")
